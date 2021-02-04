@@ -2,15 +2,15 @@ import torch
 from torch import nn
 from tqdm.auto import tqdm
 from torchvision import transforms
-from torchvision.datasets import MNIST
+from torchvision.datasets import CIFAR10
 from torchvision.utils import make_grid
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
-torch.manual_seed(0) 
+# torch.manual_seed(0) 
 
-device = "cpu"
+device = "cuda"
 
-def show_tensor_images(image_tensor, num_images=25, size=(1, 28, 28)):
+def show_tensor_images(image_tensor, num_images=25, size=(3, 32, 32)):
     '''
     Function for visualizing images: Given a tensor of images, number of images, and
     size per image, plots and prints the images in an uniform grid.
@@ -21,112 +21,88 @@ def show_tensor_images(image_tensor, num_images=25, size=(1, 28, 28)):
     plt.imshow(image_grid.permute(1, 2, 0).squeeze())
     plt.show()
 
+
 class Generator(nn.Module):
-  '''
-  Generator Class 
-  parameters -> z_dim, hidden_dim, out_channels
-  returns -> transpose convolution of the noise vector
-
-  '''
-  def __init__(self, z_dim=10, hidden_dim=64, out_channels=1):
+  def __init__(self, z_dim=100, out_channels=3, hidden_size=64):
     super(Generator, self).__init__()
-    
+
     self.z_dim = z_dim
-    self.gen = nn.Sequential(
-            self.makegenblock(self.z_dim, hidden_dim * 4),
-            self.makegenblock(hidden_dim * 4, hidden_dim * 2, kernel_size=4, stride=1),
-            self.makegenblock(hidden_dim * 2, hidden_dim),
-            self.makegenblock(hidden_dim, out_channels, kernel_size=4, lastlayer=True),
-        )
-    
-  def makegenblock(self, im_channels, out_channels, kernel_size=3, stride=2, lastlayer=False):
-    if not lastlayer:
-      gen = nn.Sequential(
-                    nn.ConvTranspose2d(im_channels, out_channels, kernel_size=kernel_size, stride=stride),
-                    nn.BatchNorm2d(out_channels),
-                    nn.ReLU(),
-                    
-                    )
-    else:
-      gen = nn.Sequential(
-                    nn.ConvTranspose2d(im_channels, out_channels, kernel_size=kernel_size, stride=stride),
-                    nn.Tanh() ## ranges between -1, 1  
-      )
+    self.generator = nn.Sequential(
 
-    return gen
+                      nn.ConvTranspose2d(self.z_dim, hidden_size*4, kernel_size=4, stride=1, padding=0, bias=False),
+                      nn.BatchNorm2d(hidden_size*4),
+                      nn.ReLU(inplace=True),
 
-  def reshape_noise(self, noise):
-    '''
-    Reshape the noise vector (num_samples, z_dim)
-    to vector of dimentions (num_samples, z_dim, 1, 1) for convolution 
-    
-    '''
+                      nn.ConvTranspose2d(hidden_size*4, hidden_size*2, kernel_size=4, stride=2, padding=1, bias=False),
+                      nn.BatchNorm2d(hidden_size*2),
+                      nn.ReLU(inplace=True), 
+
+                      nn.ConvTranspose2d(hidden_size*2, hidden_size, kernel_size=4, stride=2, padding=1, bias=False),
+                      nn.BatchNorm2d(hidden_size),
+                      nn.ReLU(inplace=True),
+
+                      nn.ConvTranspose2d(hidden_size, out_channels, kernel_size=4, stride=2, padding=1, bias=False),
+                      nn.Tanh(),
+    )
+
+  
+  def changeNoise(self, noise):
     return noise.view(len(noise), self.z_dim, 1, 1)
 
-  def forward(self, noise):
-    noise = self.reshape_noise(noise)
-    return self.gen(noise)
 
-gen = Generator(z_dim=64).to(device)
+  def forward(self, vector):
+    return self.generator(self.changeNoise(vector))
 
 
 class Discriminator(nn.Module):
-  '''
-  Discriminator class 
-  parameters -> hidden_dim, out_channel
-  returns -> vector of shape (num_samples, 1) for sigmoid activation
-
-  '''
-  def __init__(self, hidden_dim=16, im_channels=1):
+  def __init__(self, im_channels=3, hidden_dim=64):
     super(Discriminator, self).__init__()
-    self.disc = nn.Sequential(
-            self.getdiscblock(im_channels, hidden_dim),
-            self.getdiscblock(hidden_dim, hidden_dim * 2),
-            self.getdiscblock(hidden_dim * 2, 1, lastlayer=True),
-        )
+
+    self.discriminator = nn.Sequential(
+
+                        nn.Conv2d(im_channels, hidden_dim , kernel_size=4, stride=2, padding=1, bias=False),
+                        nn.BatchNorm2d(hidden_dim),
+                        nn.LeakyReLU(0.2, inplace=True),
+
+                        nn.Conv2d(hidden_dim, hidden_dim * 2, kernel_size=4, stride=2, padding=1, bias=False),
+                        nn.BatchNorm2d(hidden_dim * 2),
+                        nn.LeakyReLU(0.2, inplace=True),
+                        
+                        nn.Conv2d(hidden_dim * 2, hidden_dim * 4, kernel_size=4, stride=2, padding=1, bias=False),
+                        nn.BatchNorm2d(hidden_dim * 4),
+                        nn.LeakyReLU(0.2, inplace=True),
+                        
+                        nn.Conv2d(hidden_dim * 4, 1, kernel_size=4, stride=1, padding=0, bias=False),
+                      
+    )
 
   
-  def getdiscblock(self,im_channels, out_channels, kernel_size=4, stride=2, lastlayer=False):
-    
-    if not lastlayer:
-      disc = nn.Sequential(
-                      nn.Conv2d(im_channels, out_channels, kernel_size=kernel_size, stride=stride),
-                      nn.BatchNorm2d(out_channels),
-                      nn.LeakyReLU(0.2)
-      )
-
-    else:
-      disc = nn.Sequential(
-                      nn.Conv2d(im_channels, out_channels, kernel_size=kernel_size, stride=stride),
-      )
-
-    return disc
   def forward(self, image):
+    return self.discriminator(image)
 
-    return self.disc(image).view(len(image), -1)
 
-disc = Discriminator().to(device)
 criterion = nn.BCEWithLogitsLoss()
 z_dim = 64
 display_step = 500
-batch_size = 128
+batch_size = 64
 
 lr = 0.0002
 
 beta_1 = 0.5 
 beta_2 = 0.999
-device = 'cpu'
+
 
 # You can tranform the image values to be between -1 and 1 (the range of the tanh activation)
 transform = transforms.Compose([
     transforms.ToTensor(),
-    transforms.Normalize((0.5,), (0.5,)),
+    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
 ])
 
 dataloader = DataLoader(
-    MNIST('.', download=True, transform=transform),
+    CIFAR10('.', download=True, transform=transform),
     batch_size=batch_size,
     shuffle=True)
+
 
 
 gen = Generator(z_dim).to(device)
@@ -134,26 +110,16 @@ gen_opt = torch.optim.Adam(gen.parameters(), lr=lr, betas=(beta_1, beta_2))
 disc = Discriminator().to(device) 
 disc_opt = torch.optim.Adam(disc.parameters(), lr=lr, betas=(beta_1, beta_2))
 
-
 def weights_init(m):
-  '''
-  Initialize weights to normal distribution with mean 0 and std of 0.02
-
-  '''
-  if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
+    if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
         torch.nn.init.normal_(m.weight, 0.0, 0.02)
-  if isinstance(m, nn.BatchNorm2d):
+    if isinstance(m, nn.BatchNorm2d):
         torch.nn.init.normal_(m.weight, 0.0, 0.02)
         torch.nn.init.constant_(m.bias, 0)
 gen = gen.apply(weights_init)
 disc = disc.apply(weights_init)
 
 def make_noise(num_samples, z_dim):
-  '''
-  Generates random noise of normal dist.
-  returns -> noise of shape (num_samples, z_dim)
-
-  '''
   return torch.randn(num_samples, z_dim, device=device)
 
 
@@ -161,7 +127,6 @@ cur_step = 0
 mean_generator_loss = 0
 mean_discriminator_loss = 0
 
-## training
 for i in range(200):
   for x, _ in tqdm(dataloader):
 
